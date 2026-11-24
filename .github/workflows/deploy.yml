@@ -1,0 +1,72 @@
+name: Deploy recap site to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+env:
+  # Quartz is not stored in this repository. The build downloads this pinned version.
+  QUARTZ_VERSION: v5.2.2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the recaps
+        uses: actions/checkout@v6
+        with:
+          path: site
+          fetch-depth: 0 # Full history gives correct page dates
+      - name: Check out Quartz
+        uses: actions/checkout@v6
+        with:
+          repository: jackyzha0/quartz
+          ref: ${{ env.QUARTZ_VERSION }}
+          path: quartz
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Cache dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-quartz-${{ env.QUARTZ_VERSION }}
+      - name: Install Quartz dependencies
+        working-directory: quartz
+        run: npm ci
+      - name: Build the site
+        working-directory: quartz
+        run: npx quartz build -d ../site -C ../site/quartz.config.yaml -o ../public
+      - name: Ask search engines to skip the site
+        # Quartz has no noindex option, so the tag is added to each built page.
+        run: |
+          find public -name '*.html' -exec \
+            sed -i 's|<head>|<head><meta name="robots" content="noindex, nofollow"/>|' {} +
+          grep -L 'name="robots"' -r public --include='*.html' | tee missing.txt
+          test ! -s missing.txt
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
